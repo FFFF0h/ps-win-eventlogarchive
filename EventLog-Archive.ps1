@@ -40,7 +40,7 @@
 Param (
     # Local folder to store Evt Data Collection 
     [parameter(Position=0, Mandatory=$False)][String]$DestinationPath = "C:\EventLogArchive",
-	[parameter(Position=1, Mandatory=$False)][string]$EventLogSourcePath = "$($Env:SystemRoot)\System32\Winevt\Logs"
+	[parameter(Position=1, Mandatory=$False)][string]$EventLogSourcePath = "$($Env:SystemRoot)\System32\Winevt\Logs",
 	[parameter(Position=2, Mandatory=$False)][int]$ArchiveRetentionDays = 182,
 	[parameter(Position=3, Mandatory=$False)][Switch]$Dry = $False
 )
