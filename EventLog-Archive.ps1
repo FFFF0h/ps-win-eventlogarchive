@@ -228,7 +228,7 @@ foreach ($Log in $eventLogConfig)
 
 			# Clear event log
 			Write-Debug "Clearing log: $($Log.LogfileName)"
-			if (!Dry) { Clear-EventLog -LogName $($Log.LogfileName) }
+			if (!$Dry) { Clear-EventLog -LogName $($Log.LogfileName) }
 		
 			## ZIP exported event logs
 			Write-Debug $TempDestinationPath
