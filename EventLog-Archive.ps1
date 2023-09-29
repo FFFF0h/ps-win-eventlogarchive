@@ -68,7 +68,7 @@ Add-Type -assembly "System.IO.Compression.FileSystem"
 # Global Variables
 [int]$ScriptVer = 1802
 [string]$MachineName = ((Get-WmiObject "Win32_ComputerSystem").Name)
-[string]$EventSource = "EventLog_LogMaintenance"
+[string]$EventSource = "EventLog Maintenance"
 [string]$TempDestinationPath = $($DestinationPath + "\_temp")
 [string]$HKLMLogMaintenancePath = "HKLM:\Software\EventLogScripts\LogMaintenance"
 [String]$CurrentScript = $MyInvocation.MyCommand.Definition
