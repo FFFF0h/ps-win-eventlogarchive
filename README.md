@@ -21,7 +21,7 @@ I originally published this script on PowerShell Gallery.
 ## Description
 
  This script will be used to automate the collection and archival of Windows event logs. When an eventlog exceeds  75% of the configured maximum size the log will be backed up, compressed, moved to the configured archive location and the log will be cleared. If no location is specified the script will default to the C:\ drive. It is recommended to set the archive path to another drive to move the logs from the default system drive.  In order to run continuously the script will created a scheduled task on the commputer to run every 30 minutes to to check the current status of event logs.   
-Status of the script will be written to the Application log [MSP_LogMaintenance].
+Status of the script will be written to the Application log [EventLog Maintenance].
 
 ### Event ID reference
 
