@@ -1,5 +1,7 @@
 <#
 .NOTES
+	????/??/?? - Version 1602 - Daniel Hibbert - Initial version.
+	2023/09/29 - Version 1802 - Laurent Le Guillermic - Enhancements & bug corrections.
 
 .SYNOPSIS
 	Collect and archive Eventlogs on Windows servers
@@ -13,7 +15,7 @@
 	In order to run continuously the script will created a scheduled task on the commputer to run every 30 minutes to
 	to check the current status of event logs.   
 
-	Status of the script will be written to the Application log [Evt_LogMaintenance]. 
+	Status of the script will be written to the Application log [EventLog_LogMaintenance]. 
 	
 .PARAMETER DestinationPath
 	The path the script will use to store the archived eventlogs. This parameter is only used durring the first run of the script.
@@ -28,8 +30,17 @@
     Path to the event log files. Default is %SystemRoot%\System32\Winevt\Logs". This parameter is only used durring the first run of the script.
 	The value will be saved to the computers registry, and the value from the registry will be used on subsiquent runs. 
 	
+.PARAMETER Install
+	Create a scheduled task to run the script every 30min and save parameters to the registry.
+	
+.PARAMETER Remove
+	Remove the scheduled task and remove saved parameters.
+	
 .PARAMETER Dry
     When present, do not remove any logs file.
+	
+.PARAMETER Debug
+	Show debug informations.
 
 .EXAMPLE
 	EventLog-Archive.ps1 -DestinationPath D:\EventLog_Archive
@@ -38,11 +49,13 @@
 	
 #>
 Param (
-    # Local folder to store Evt Data Collection 
+    # Local folder to store EventLog Data Collection 
     [parameter(Position=0, Mandatory=$False)][String]$DestinationPath = "C:\EventLogArchive",
 	[parameter(Position=1, Mandatory=$False)][string]$EventLogSourcePath = "$($Env:SystemRoot)\System32\Winevt\Logs",
 	[parameter(Position=2, Mandatory=$False)][int]$ArchiveRetentionDays = 182,
-	[parameter(Position=3, Mandatory=$False)][Switch]$Dry = $False
+	[parameter(Position=3, Mandatory=$False)][Switch]$Install = $False,
+	[parameter(Position=4, Mandatory=$False)][Switch]$Remove = $False,
+	[parameter(Position=5, Mandatory=$False)][Switch]$Dry = $False
 )
 
 
@@ -53,11 +66,11 @@ if ($PSBoundParameters["Debug"]) { $DebugPreference = "Continue" }
 Add-Type -assembly "System.IO.Compression.FileSystem"
 
 # Global Variables
-[int]$ScriptVer = 1702
+[int]$ScriptVer = 1802
 [string]$MachineName = ((Get-WmiObject "Win32_ComputerSystem").Name)
-[string]$EventSource = "Evt_LogMaintenance"
+[string]$EventSource = "EventLog_LogMaintenance"
 [string]$TempDestinationPath = $($DestinationPath + "\_temp")
-[string]$HKLMLogMaintenancePath = "HKLM:\Software\Evt_Scripts\LogMaintenance"
+[string]$HKLMLogMaintenancePath = "HKLM:\Software\EventLogScripts\LogMaintenance"
 [String]$CurrentScript = $MyInvocation.MyCommand.Definition
 
 # ScheduleTaskXML 
@@ -113,19 +126,46 @@ Add-Type -assembly "System.IO.Compression.FileSystem"
 </Task>
 "@
 
+### CHECK PARAMETERS ###
+if (!(Test-Path $EventLogSourcePath))
+{
+	Write-Error "[SETUP]The EventLog Source path $EventLogSourcePath doesn't exists !"
+	Exit
+}
 
 ### SETUP ###
 Switch (Test-Path $HKLMLogMaintenancePath) 
 {
 	$False {
+		# Exit if remove switch and the script is not installed !
+		if ($PSBoundParameters.ContainsKey("Remove")) 
+		{ 
+			Write-Error "[SETUP]The script is not installed, nothing to remove !"
+			Exit 
+		}
+
+		# If no install switch, don't install it and exit if Destination path doesn't exists !
+		if (!$PSBoundParameters.ContainsKey("Install")) 
+		{ 
+			if (!((Test-Path $DestinationPath) -and (Test-Path "$DestinationPath\_temp")))
+			{
+				Write-Error "[SETUP]The EventLog Destination path $DestinationPath doesn't exists !"
+				Exit
+			}
+			
+			Break 
+		}
+		
 		# Create script registry entries
-		New-Item -Path $HKLMLogMaintenancePath -Force
-		New-ItemProperty -Path $HKLMLogMaintenancePath -Name ScriptVersion -Value $ScriptVer
-		New-ItemProperty -Path $HKLMLogMaintenancePath -Name DestinationPath -Value $DestinationPath
-		New-ItemProperty -Path $HKLMLogMaintenancePath -Name ArchiveRetentionDays -Value $ArchiveRetentionDays
+		Write-Debug "[SETUP]Creating Event Log archive registry entries: $HKLMLogMaintenancePath"
+		New-Item -Path $HKLMLogMaintenancePath -Force | Out-Null
+		New-ItemProperty -Path $HKLMLogMaintenancePath -Name ScriptVersion -Value $ScriptVer | Out-Null
+		New-ItemProperty -Path $HKLMLogMaintenancePath -Name EventLogSourcePath -Value $EventLogSourcePath | Out-Null
+		New-ItemProperty -Path $HKLMLogMaintenancePath -Name DestinationPath -Value $DestinationPath | Out-Null
+		New-ItemProperty -Path $HKLMLogMaintenancePath -Name ArchiveRetentionDays -Value $ArchiveRetentionDays | Out-Null
 		
 		# Add Event Log entry for logging script actions
-		EventCreate /ID 775 /L Application /T Information /SO $EventSource /D "Log Maintenance Script installation started"
+		eventcreate /ID 775 /L Application /T Information /SO $EventSource /D "Log Maintenance Script installation started" | Out-Null
 
 		# Create event log archive directory
 		Write-Debug "[SETUP]Creating Event Log archive directory: $DestinationPath"
@@ -133,7 +173,7 @@ Switch (Test-Path $HKLMLogMaintenancePath)
 		{
 			New-Item $DestinationPath -type directory -ErrorAction Stop -Force | Out-Null
 			New-Item $TempDestinationPath -type directory -ErrorAction Stop -Force | Out-Null
-			New-Item $($DestinationPath + "\_Script") -type directory -ErrorAction Stop -Force | Out-Null
+			New-Item $($DestinationPath + "\_script") -type directory -ErrorAction Stop -Force | Out-Null
 			$eventMessage = "Created Event Log Archive directory:`n`n$DestinationPath"
 			Write-EventLog -LogName Application -Source $EventSource -EventId 775 -Message $eventMessage -Category 1 -EntryType Information			 
 		}
@@ -147,7 +187,8 @@ Switch (Test-Path $HKLMLogMaintenancePath)
 		}
 		
 		# Copy script to archive location
-		$scriptCopyDestinationination = $($DestinationPath + "\_Script\" + $($CurrentScript.Split('\'))[4])
+		$scriptCopyDestination = $($DestinationPath + "\_script\" + $($CurrentScript.Split('\'))[-1])
+		Write-Debug "[SETUP]Copying script to: $scriptCopyDestination"
 		Copy-Item $CurrentScript -Destination $scriptCopyDestination
 
 		# Update Scheduled task XML with current logged on user
@@ -162,12 +203,12 @@ Switch (Test-Path $HKLMLogMaintenancePath)
 
 		# Write Scheduled Task XML
 		Write-Debug "[SETUP]Saving scheduled task XML to disk"
-		$XMLExportPath = ($DestinationPath + "\_Script\" + $MachineName + "-LogArchive.xml")
+		$XMLExportPath = ($DestinationPath + "\_script\" + $MachineName + "-LogArchive.xml")
 		$ScheduledTaskXML.Save($XMLExportPath)
 
 		# Create scheduled task
 		Write-Debug "[SETUP]Creating Scheduled Task for Event Log Archive"
-		Schtasks /create /tn "Event Log Archive" /xml $XMLExportPath
+		schtasks /create /tn "Event Log Archive" /xml $XMLExportPath
 		Start-Sleep -Seconds 10
 		
 		# First run scheduled task
@@ -175,20 +216,97 @@ Switch (Test-Path $HKLMLogMaintenancePath)
 		Schtasks /Run /tn "Event Log Archive"
 	}
 	$True {	
-		Write-Debug "No configuration needed"
-		$DestinationPath = ((Get-ItemProperty -Path $HKLMLogMaintenancePath).DestinationPath)
-		Write-Debug "EventLog Archive path: $DestinationPath"
+		# Exit if install switch and the script is already installed !
+		if ($PSBoundParameters.ContainsKey("Install")) 
+		{ 
+			Write-Error "[SETUP]The script is already installed !"
+			Exit 
+		} 	
+	
+		# Remove script
+		if ($Remove)
+		{
+			# Remove script registry entries
+			Write-Debug "[SETUP]Removing Registry entries for Event Log Archive"
+			Remove-Item -Path $HKLMLogMaintenancePath -Force
+				
+			# Create scheduled task
+			Write-Debug "[SETUP]Removing Scheduled Task for Event Log Archive"
+			schtasks /Delete /tn "Event Log Archive" /F
+			Start-Sleep -Seconds 10
+			Exit
+		}	
+	
+		# Read configuration
+		Write-Debug "Reading saved configuration"
+		
+		# Source path
+		$readEventLogSourcePath = $true
+		if ($PSBoundParameters.ContainsKey("EventLogSourcePath"))
+		{
+			if (Test-Path $EventLogSourcePath)
+			{
+				Write-Debug "Forcing EventLog Source path: $EventLogSourcePath"
+				$readEventLogSourcePath = $false
+			}
+			else
+			{
+				Write-Warning "Can't force EventLog Source path : $EventLogSourcePath doesn't exists !"
+			}
+		}
+		
+		if ($readEventLogSourcePath)
+		{
+			$EventLogSourcePath = ((Get-ItemProperty -Path $HKLMLogMaintenancePath).EventLogSourcePath)
+			#Write-Debug "EventLog Source path: $EventLogSourcePath"
+		}
+		
+		# Destination path
+		$readDestinationPath = $true
+		if ($PSBoundParameters.ContainsKey("DestinationPath"))
+		{
+			if ((Test-Path $DestinationPath) -and (Test-Path "$DestinationPath\_temp"))
+			{
+				Write-Debug "Forcing EventLog Destination path: $DestinationPath"
+				$readDestinationPath = $false
+			}
+			else
+			{
+				Write-Warning "Can't force EventLog Destination path : $DestinationPath doesn't exists !"
+			}
+			
+		}
+		
+		if ($readDestinationPath)
+		{
+			$DestinationPath = ((Get-ItemProperty -Path $HKLMLogMaintenancePath).DestinationPath)
+			#Write-Debug "EventLog Destination path: $DestinationPath"
+		}
 		
 		[string]$TempDestinationPath = $($DestinationPath + "\_temp")
-		Write-Debug "EventLog Archive temp path: $TempDestinationPath"
+		#Write-Debug "EventLog Archive temporary path: $TempDestinationPath"
 		
-		$ArchiveRetentionDays = ((Get-ItemProperty -Path $HKLMLogMaintenancePath).ArchiveRetentionDays)
-		Write-Debug "EventLog Archive retention days: $(&{If ($ArchiveRetentionDays -eq -1) { "Infinite" } Else { $ArchiveRetentionDays }})"
+		# Archive retention days
+		if ($PSBoundParameters.ContainsKey("ArchiveRetentionDays"))
+		{
+			Write-Debug "Forcing EventLog Archive retention days: $(&{If ($ArchiveRetentionDays -eq -1) { "Infinite" } Else { $ArchiveRetentionDays }})"
+		}
+		else
+		{
+			$ArchiveRetentionDays = ((Get-ItemProperty -Path $HKLMLogMaintenancePath).ArchiveRetentionDays)
+			#Write-Debug "EventLog Archive retention days: $(&{If ($ArchiveRetentionDays -eq -1) { "Infinite" } Else { $ArchiveRetentionDays }})"
+		}
 		
-        $message = "Starting Evt EventLog Archive Tool"
+        $message = "Starting EventLog Archive Tool"
 		Write-EventLog -LogName Application -Source $EventSource -EventId 776 -Message $message -Category 1 -EntryType Information
 	}
 } 
+
+# Show parameters
+Write-Debug "EventLog Source path: $EventLogSourcePath"
+Write-Debug "EventLog Destination path: $DestinationPath"
+Write-Debug "EventLog Archive temporary path: $TempDestinationPath"
+Write-Debug "EventLog Archive retention days: $(&{If ($ArchiveRetentionDays -eq -1) { "Infinite" } Else { $ArchiveRetentionDays }})"
 
 
 ### ARCHIVE CURRENT LOGS ###
@@ -341,5 +459,5 @@ if (($autoArchivedLogFiles).Count -gt 0)
 # reset default debug preference
 $DebugPreference = "SilentlyContinue"
 
-$message = "Stopping Evt EventLog Archive Tool"
+$message = "Stopping EventLog Archive Tool"
 Write-EventLog -LogName Application -Source $EventSource -EventId 779 -Message $message -Category 1 -EntryType Information
