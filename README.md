@@ -1,5 +1,9 @@
 # PowersShell - Windows Event Log Archiver
 
+## Versions
+	????/??/?? - Version 1602 - Daniel Hibbert - Initial version.
+	2023/09/29 - Version 1802 - Laurent Le Guillermic - Enhancements & bug corrections.
+
 ## Background
 
 I Received a request to archive all of the event logs on server, and maintain the archived logs on the server for up to six months. To meet these requirements the following script will create a schedule task that will run every 30 minutes. Each event log will be checked, and if the size exceeds 75% of the confgured maximum log file size the log will be exported and compressed to the configured archive directory. The script will query for any event logs that were automatically archived by the system in the defualt event log location (C:\Windows\System32\Winevt\logs) and will compress and archive the files to the configured archive location. After the archived event logs have exceeded the configured retention period it will be automatically removed the next time the task is run.
