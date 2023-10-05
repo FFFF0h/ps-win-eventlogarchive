@@ -162,7 +162,7 @@ Switch (Test-Path $HKLMLogMaintenancePath)
 		New-ItemProperty -Path $HKLMLogMaintenancePath -Name ScriptVersion -Value $ScriptVer | Out-Null
 		New-ItemProperty -Path $HKLMLogMaintenancePath -Name EventLogSourcePath -Value $EventLogSourcePath | Out-Null
 		New-ItemProperty -Path $HKLMLogMaintenancePath -Name DestinationPath -Value $DestinationPath | Out-Null
-		New-ItemProperty -Path $HKLMLogMaintenancePath -Name ArchiveRetentionDays -Value $ArchiveRetentionDays | Out-Null
+		New-ItemProperty -Path $HKLMLogMaintenancePath -Name ArchiveRetentionDays -Value "$ArchiveRetentionDays" | Out-Null
 		
 		# Add Event Log entry for logging script actions
 		eventcreate /ID 775 /L Application /T Information /SO $EventSource /D "Log Maintenance Script installation started" | Out-Null
