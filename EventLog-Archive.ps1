@@ -2,6 +2,7 @@
 .NOTES
 	????/??/?? - Version 1602 - Daniel Hibbert - Initial version.
 	2023/09/29 - Version 1802 - Laurent Le Guillermic - Enhancements & bug corrections.
+    2023/10/17 - Version 1902 - Laurent Le Guillermic - fix some bugs.
 
 .SYNOPSIS
 	Collect and archive Eventlogs on Windows servers
@@ -58,6 +59,25 @@ Param (
 	[parameter(Position=5, Mandatory=$False)][Switch]$Dry = $False
 )
 
+#$DestinationPath = ".\EventLogArchive"
+#$EventLogSourcePath = ".\Archivage_Logs\"
+#$ArchiveRetentionDays = -1
+#$Dry = $True
+
+### FUNCTIONS ###
+function GetFullPathFromPSPath
+{
+    Param(
+    [Parameter(Mandatory=$true)][String]$Path
+    )
+
+    $provider = $null;
+    $drive = $null
+    $pathHelper = $ExecutionContext.SessionState.Path
+    $providerPath = $pathHelper.GetUnresolvedProviderPathFromPSPath($Path, [ref]$provider, [ref]$drive)
+    return $providerPath
+}
+
 
 ### INIT ###
 if ($PSBoundParameters["Debug"]) { $DebugPreference = "Continue" }
@@ -66,10 +86,13 @@ if ($PSBoundParameters["Debug"]) { $DebugPreference = "Continue" }
 Add-Type -assembly "System.IO.Compression.FileSystem"
 
 # Global Variables
-[int]$ScriptVer = 1802
+[int]$ScriptVer = 1902
 [string]$MachineName = ((Get-WmiObject "Win32_ComputerSystem").Name)
 [string]$EventSource = "EventLog Maintenance"
-[string]$TempDestinationPath = $($DestinationPath + "\_temp")
+$DestinationPath = GetFullPathFromPSPath -Path $DestinationPath
+$EventLogSourcePath = GetFullPathFromPSPath -Path $EventLogSourcePath
+[string]$TempDestinationPath = Join-Path -Path $DestinationPath -ChildPath "_temp"
+[string]$ScriptDestinationPath = Join-Path -Path $DestinationPath -ChildPath "_script"
 [string]$HKLMLogMaintenancePath = "HKLM:\Software\EventLogScripts\LogMaintenance"
 [String]$CurrentScript = $MyInvocation.MyCommand.Definition
 
@@ -134,177 +157,178 @@ if (!(Test-Path $EventLogSourcePath))
 }
 
 ### SETUP ###
-Switch (Test-Path $HKLMLogMaintenancePath) 
+if (!(Test-Path $HKLMLogMaintenancePath)) 
 {
-	$False {
-		# Exit if remove switch and the script is not installed !
-		if ($PSBoundParameters.ContainsKey("Remove")) 
-		{ 
-			Write-Error "[SETUP]The script is not installed, nothing to remove !"
-			Exit 
-		}
-
-		# If no install switch, don't install it and exit if Destination path doesn't exists !
-		if (!$PSBoundParameters.ContainsKey("Install")) 
-		{ 
-			if (!((Test-Path $DestinationPath) -and (Test-Path "$DestinationPath\_temp")))
-			{
-				Write-Error "[SETUP]The EventLog Destination path $DestinationPath doesn't exists !"
-				Exit
-			}
-			
-			Break 
-		}
-		
-		# Create script registry entries
-		Write-Debug "[SETUP]Creating Event Log archive registry entries: $HKLMLogMaintenancePath"
-		New-Item -Path $HKLMLogMaintenancePath -Force | Out-Null
-		New-ItemProperty -Path $HKLMLogMaintenancePath -Name ScriptVersion -Value $ScriptVer | Out-Null
-		New-ItemProperty -Path $HKLMLogMaintenancePath -Name EventLogSourcePath -Value $EventLogSourcePath | Out-Null
-		New-ItemProperty -Path $HKLMLogMaintenancePath -Name DestinationPath -Value $DestinationPath | Out-Null
-		New-ItemProperty -Path $HKLMLogMaintenancePath -Name ArchiveRetentionDays -Value "$ArchiveRetentionDays" | Out-Null
-		
-		# Add Event Log entry for logging script actions
-		eventcreate /ID 775 /L Application /T Information /SO $EventSource /D "Log Maintenance Script installation started" | Out-Null
-
-		# Create event log archive directory
-		Write-Debug "[SETUP]Creating Event Log archive directory: $DestinationPath"
-		try 
-		{
-			New-Item $DestinationPath -type directory -ErrorAction Stop -Force | Out-Null
-			New-Item $TempDestinationPath -type directory -ErrorAction Stop -Force | Out-Null
-			New-Item $($DestinationPath + "\_script") -type directory -ErrorAction Stop -Force | Out-Null
-			$eventMessage = "Created Event Log Archive directory:`n`n$DestinationPath"
-			Write-EventLog -LogName Application -Source $EventSource -EventId 775 -Message $eventMessage -Category 1 -EntryType Information			 
-		}
-		Catch 
-		{
-			# Unable to create the archive directory. The script will end.
-			$eventMessage = "Unable to create Event Log Archive directory.`n`n$_`nThe script will now end."
-			Write-EventLog -LogName Application -Source $EventSource -EventId 775 -Message $eventMessage -Category 1 -EntryType Error
-			Write-Error "Unable to create Event Log Archive directory: $_"
-			Exit
-		}
-		
-		# Copy script to archive location
-		$scriptCopyDestination = $($DestinationPath + "\_script\" + $($CurrentScript.Split('\'))[-1])
-		Write-Debug "[SETUP]Copying script to: $scriptCopyDestination"
-		Copy-Item $CurrentScript -Destination $scriptCopyDestination
-
-		# Update Scheduled task XML with current logged on user
-		$creator = ($($env:UserDomain) + "\" + $($env:UserName))
-		$ScheduledTaskXML.Task.RegistrationInfo.Author = $($creator)
-		Write-Debug "[SETUP]Task Author Account set as: $($creator)"
-		
-		# Update Scheduled Task with path to script
-		$taskArguments = $ScheduledTaskXML.Task.Actions.Exec.Arguments.Replace("REPLACE", "$($scriptCopyDestination)")
-		$ScheduledTaskXML.Task.Actions.Exec.Arguments = $taskArguments
-		Write-Debug "[SETUP]Task Action Script Path: $($taskArguments)"
-
-		# Write Scheduled Task XML
-		Write-Debug "[SETUP]Saving scheduled task XML to disk"
-		$XMLExportPath = ($DestinationPath + "\_script\" + $MachineName + "-LogArchive.xml")
-		$ScheduledTaskXML.Save($XMLExportPath)
-
-		# Create scheduled task
-		Write-Debug "[SETUP]Creating Scheduled Task for Event Log Archive"
-		schtasks /create /tn "Event Log Archive" /xml $XMLExportPath
-		Start-Sleep -Seconds 10
-		
-		# First run scheduled task
-		Write-Debug "[SETUP]Running task for first time"
-		Schtasks /Run /tn "Event Log Archive"
+	# Exit if remove switch and the script is not installed !
+	if ($PSBoundParameters.ContainsKey("Remove")) 
+	{ 
+		Write-Error "[SETUP]The script is not installed, nothing to remove !"
+		Exit 
 	}
-	$True {	
-		# Exit if install switch and the script is already installed !
-		if ($PSBoundParameters.ContainsKey("Install")) 
-		{ 
-			Write-Error "[SETUP]The script is already installed !"
-			Exit 
-		} 	
-	
-		# Remove script
-		if ($Remove)
+
+	# If no install switch, don't install it and exit if Destination path doesn't exists !
+	if (!$PSBoundParameters.ContainsKey("Install")) 
+	{ 
+		if (!((Test-Path $DestinationPath) -and (Test-Path $TempDestinationPath)))
 		{
-			# Remove script registry entries
-			Write-Debug "[SETUP]Removing Registry entries for Event Log Archive"
-			Remove-Item -Path $HKLMLogMaintenancePath -Force
-				
-			# Create scheduled task
-			Write-Debug "[SETUP]Removing Scheduled Task for Event Log Archive"
-			schtasks /Delete /tn "Event Log Archive" /F
-			Start-Sleep -Seconds 10
+			Write-Error "[SETUP]The EventLog Destination path $DestinationPath doesn't exists !"
 			Exit
-		}	
+		}		
+	}
+    else
+    {	
+	    # Create script registry entries
+	    Write-Debug "[SETUP]Creating Event Log archive registry entries: $HKLMLogMaintenancePath"
+	    New-Item -Path $HKLMLogMaintenancePath -Force | Out-Null
+	    New-ItemProperty -Path $HKLMLogMaintenancePath -Name ScriptVersion -Value $ScriptVer | Out-Null
+	    New-ItemProperty -Path $HKLMLogMaintenancePath -Name EventLogSourcePath -Value $EventLogSourcePath | Out-Null
+	    New-ItemProperty -Path $HKLMLogMaintenancePath -Name DestinationPath -Value $DestinationPath | Out-Null
+	    New-ItemProperty -Path $HKLMLogMaintenancePath -Name ArchiveRetentionDays -Value "$ArchiveRetentionDays" | Out-Null
+		
+	    # Add Event Log entry for logging script actions
+	    eventcreate /ID 775 /L Application /T Information /SO $EventSource /D "Log Maintenance Script installation started" | Out-Null
+
+	    # Create event log archive directory
+	    Write-Debug "[SETUP]Creating Event Log archive directory: $DestinationPath"
+	    try 
+	    {
+		    New-Item $DestinationPath -type directory -ErrorAction Stop -Force | Out-Null
+		    New-Item $TempDestinationPath -type directory -ErrorAction Stop -Force | Out-Null
+		    New-Item $($DestinationPath + "\_script") -type directory -ErrorAction Stop -Force | Out-Null
+		    $eventMessage = "Created Event Log Archive directory:`n`n$DestinationPath"
+		    Write-EventLog -LogName Application -Source $EventSource -EventId 775 -Message $eventMessage -Category 1 -EntryType Information			 
+	    }
+	    Catch 
+	    {
+		    # Unable to create the archive directory. The script will end.
+		    $eventMessage = "Unable to create Event Log Archive directory.`n`n$_`nThe script will now end."
+		    Write-EventLog -LogName Application -Source $EventSource -EventId 775 -Message $eventMessage -Category 1 -EntryType Error
+		    Write-Error "Unable to create Event Log Archive directory: $_"
+		    Exit
+	    }
+		
+	    # Copy script to archive location
+	    $scriptCopyDestination = Join-Path -Path $ScriptDestinationPath -ChildPath $($CurrentScript.Split('\'))[-1]
+	    Write-Debug "[SETUP]Copying script to: $scriptCopyDestination"
+	    Copy-Item $CurrentScript -Destination $scriptCopyDestination
+
+	    # Update Scheduled task XML with current logged on user
+	    $creator = ($($env:UserDomain) + "\" + $($env:UserName))
+	    $ScheduledTaskXML.Task.RegistrationInfo.Author = $($creator)
+	    Write-Debug "[SETUP]Task Author Account set as: $($creator)"
+		
+	    # Update Scheduled Task with path to script
+	    $taskArguments = $ScheduledTaskXML.Task.Actions.Exec.Arguments.Replace("REPLACE", "$($scriptCopyDestination)")
+	    $ScheduledTaskXML.Task.Actions.Exec.Arguments = $taskArguments
+	    Write-Debug "[SETUP]Task Action Script Path: $($taskArguments)"
+
+	    # Write Scheduled Task XML
+	    Write-Debug "[SETUP]Saving scheduled task XML to disk"
+	    $XMLExportPath = ($DestinationPath + "\_script\" + $MachineName + "-LogArchive.xml")
+	    $ScheduledTaskXML.Save($XMLExportPath)
+
+	    # Create scheduled task
+	    Write-Debug "[SETUP]Creating Scheduled Task for Event Log Archive"
+	    schtasks /create /tn "Event Log Archive" /xml $XMLExportPath
+	    Start-Sleep -Seconds 10
+		
+	    # First run scheduled task
+	    Write-Debug "[SETUP]Running task for first time"
+	    Schtasks /Run /tn "Event Log Archive"
+    }
+}
+else
+{	
+	# Exit if install switch and the script is already installed !
+	if ($PSBoundParameters.ContainsKey("Install")) 
+	{ 
+		Write-Error "[SETUP]The script is already installed !"
+		Exit 
+	} 	
 	
-		# Read configuration
-		Write-Debug "Reading saved configuration"
+	# Remove script
+	if ($Remove)
+	{
+		# Remove script registry entries
+		Write-Debug "[SETUP]Removing Registry entries for Event Log Archive"
+		Remove-Item -Path $HKLMLogMaintenancePath -Force
+				
+		# Create scheduled task
+		Write-Debug "[SETUP]Removing Scheduled Task for Event Log Archive"
+		schtasks /Delete /tn "Event Log Archive" /F
+		Start-Sleep -Seconds 10
+		Exit
+	}	
+	
+	# Read configuration
+	Write-Debug "Reading saved configuration"
 		
-		# Source path
-		$readEventLogSourcePath = $true
-		if ($PSBoundParameters.ContainsKey("EventLogSourcePath"))
+	# Source path
+	$readEventLogSourcePath = $true
+	if ($PSBoundParameters.ContainsKey("EventLogSourcePath"))
+	{
+		if (Test-Path $EventLogSourcePath)
 		{
-			if (Test-Path $EventLogSourcePath)
-			{
-				Write-Debug "Forcing EventLog Source path: $EventLogSourcePath"
-				$readEventLogSourcePath = $false
-			}
-			else
-			{
-				Write-Warning "Can't force EventLog Source path : $EventLogSourcePath doesn't exists !"
-			}
-		}
-		
-		if ($readEventLogSourcePath)
-		{
-			$EventLogSourcePath = ((Get-ItemProperty -Path $HKLMLogMaintenancePath).EventLogSourcePath)
-			#Write-Debug "EventLog Source path: $EventLogSourcePath"
-		}
-		
-		# Destination path
-		$readDestinationPath = $true
-		if ($PSBoundParameters.ContainsKey("DestinationPath"))
-		{
-			if ((Test-Path $DestinationPath) -and (Test-Path "$DestinationPath\_temp"))
-			{
-				Write-Debug "Forcing EventLog Destination path: $DestinationPath"
-				$readDestinationPath = $false
-			}
-			else
-			{
-				Write-Warning "Can't force EventLog Destination path : $DestinationPath doesn't exists !"
-			}
-			
-		}
-		
-		if ($readDestinationPath)
-		{
-			$DestinationPath = ((Get-ItemProperty -Path $HKLMLogMaintenancePath).DestinationPath)
-			#Write-Debug "EventLog Destination path: $DestinationPath"
-		}
-		
-		[string]$TempDestinationPath = $($DestinationPath + "\_temp")
-		#Write-Debug "EventLog Archive temporary path: $TempDestinationPath"
-		
-		# Archive retention days
-		if ($PSBoundParameters.ContainsKey("ArchiveRetentionDays"))
-		{
-			Write-Debug "Forcing EventLog Archive retention days: $(&{If ($ArchiveRetentionDays -eq -1) { "Infinite" } Else { $ArchiveRetentionDays }})"
+			Write-Debug "Forcing EventLog Source path: $EventLogSourcePath"
+			$readEventLogSourcePath = $false
 		}
 		else
 		{
-			$ArchiveRetentionDays = ((Get-ItemProperty -Path $HKLMLogMaintenancePath).ArchiveRetentionDays)
-			#Write-Debug "EventLog Archive retention days: $(&{If ($ArchiveRetentionDays -eq -1) { "Infinite" } Else { $ArchiveRetentionDays }})"
+			Write-Warning "Can't force EventLog Source path : $EventLogSourcePath doesn't exists !"
 		}
-		
-        $message = "Starting EventLog Archive Tool"
-		Write-EventLog -LogName Application -Source $EventSource -EventId 776 -Message $message -Category 1 -EntryType Information
 	}
+		
+	if ($readEventLogSourcePath)
+	{
+		$EventLogSourcePath = ((Get-ItemProperty -Path $HKLMLogMaintenancePath).EventLogSourcePath)
+		#Write-Debug "EventLog Source path: $EventLogSourcePath"
+	}
+		
+	# Destination path
+	$readDestinationPath = $true
+	if ($PSBoundParameters.ContainsKey("DestinationPath"))
+	{
+		if ((Test-Path $DestinationPath) -and (Test-Path $TempDestinationPath))
+		{
+			Write-Debug "Forcing EventLog Destination path: $DestinationPath"
+			$readDestinationPath = $false
+		}
+		else
+		{
+			Write-Warning "Can't force EventLog Destination path : $DestinationPath doesn't exists !"
+		}
+			
+	}
+		
+	if ($readDestinationPath)
+	{
+		$DestinationPath = ((Get-ItemProperty -Path $HKLMLogMaintenancePath).DestinationPath)
+		#Write-Debug "EventLog Destination path: $DestinationPath"
+	}
+		
+	[string]$TempDestinationPath = Join-Path -Path $DestinationPath -ChildPath "_temp"
+	#Write-Debug "EventLog Archive temporary path: $TempDestinationPath"
+		
+	# Archive retention days
+	if ($PSBoundParameters.ContainsKey("ArchiveRetentionDays"))
+	{
+		Write-Debug "Forcing EventLog Archive retention days: $(&{If ($ArchiveRetentionDays -eq -1) { "Infinite" } Else { $ArchiveRetentionDays }})"
+	}
+	else
+	{
+		$ArchiveRetentionDays = ((Get-ItemProperty -Path $HKLMLogMaintenancePath).ArchiveRetentionDays)
+		#Write-Debug "EventLog Archive retention days: $(&{If ($ArchiveRetentionDays -eq -1) { "Infinite" } Else { $ArchiveRetentionDays }})"
+	}
+		
+    $message = "Starting EventLog Archive Tool"
+	Write-EventLog -LogName Application -Source $EventSource -EventId 776 -Message $message -Category 1 -EntryType Information
 } 
 
 # Show parameters
+if ($Dry) { Write-Debug "Dry Run mode" }
 Write-Debug "EventLog Source path: $EventLogSourcePath"
 Write-Debug "EventLog Destination path: $DestinationPath"
+Write-Debug "EventLog Archive script path: $ScriptDestinationPath"
 Write-Debug "EventLog Archive temporary path: $TempDestinationPath"
 Write-Debug "EventLog Archive retention days: $(&{If ($ArchiveRetentionDays -eq -1) { "Infinite" } Else { $ArchiveRetentionDays }})"
 
@@ -326,44 +350,52 @@ foreach ($Log in $eventLogConfig)
 	Write-Debug "$($Log.LogfileName) will be archived at $logAlarmSize MB"
 
 	# Check current log files against threshold
-	Switch ($logSizeMB -lt $logAlarmSize)
+	if ($logSizeMB -lt $logAlarmSize)
 	{
-		$True { Write-Debug "$($Log.LogfileName) Log below threshold" }
-		$False {  
-			# Event log archive location
-			$eventLogArchiveFolderPath = $($DestinationPath + "\" + $($Log.LogfileName))
+        Write-Debug "$($Log.LogfileName) Log below threshold" 
+    }
+    else
+    {  
+		# Event log archive location
+		$eventLogArchiveFolderPath = Join-Path -Path $DestinationPath -ChildPath $($Log.LogfileName)
 
-			# Check / Create directory for log
-			if ((Test-Path $eventLogArchiveFolderPath) -eq $False) 
-			{ 
-				New-Item $eventLogArchiveFolderPath -type directory -ErrorAction Stop -Force | Out-Null 
-			}
-
-			# Export log to temp directory
-			$tempEventLogFullPath = $TempDestinationPath + "\" + $($Log.LogfileName) + "_TEMP.evt"
-			$tempEvtLog = Get-WmiObject Win32_NTEventlogFile | ? {$_.LogfileName -eq $($log.LogfileName)}
-			$tempEvtLog.BackupEventLog($tempEventLogFullPath)
-
-			# Clear event log
-			Write-Debug "Clearing log: $($Log.LogfileName)"
-			if (!$Dry) { Clear-EventLog -LogName $($Log.LogfileName) }
-		
-			## ZIP exported event logs
-			Write-Debug $TempDestinationPath
-			$zipArchiveFile = ($eventLogArchiveFolderPath + "\" + $MachineName + "_" + $($Log.LogfileName) + "_Archive_" + (Get-Date -Format MM.dd.yyyy-hhmm) + ".zip")
-		
-			Write-Debug "Compressing archived log: $zipArchiveFile"
-			[IO.Compression.ZIPFile]::CreateFromDirectory($TempDestinationPath, $zipArchiveFile)		
-		
-			# Delete event log temp file
-			Write-Debug "Removing temp event log file"
-			try { Remove-Item $tempEventLogFullPath -ErrorAction Stop }	      
-			catch {}    
-            
-			# Write event log entry
-			$message = "Security log size (" + $logSizeMB + "mb) exceeded 75% of configured maximum and was archived to: " + $zipArchiveFile
-			Write-EventLog -LogName Application -Source $EventSource -EventId 775 -Message $message -Category 1
+		# Check / Create directory for log
+		if (!(Test-Path $eventLogArchiveFolderPath)) 
+		{ 
+			New-Item $eventLogArchiveFolderPath -type directory -ErrorAction Stop -Force | Out-Null 
 		}
+Write-Debug "BLA"
+
+		# Export log to temp directory
+		$tempEventLogFullPath = Join-Path -Path $TempDestinationPath -ChildPath "$($Log.LogfileName)_TEMP.evt"
+		$tempEvtLog = Get-WmiObject Win32_NTEventlogFile | ? {$_.LogfileName -eq $($log.LogfileName)}
+		$tempEvtLog.BackupEventLog($tempEventLogFullPath)
+
+Write-Debug "BLA"
+
+		# Clear event log
+        if (!$Dry) 
+        {
+			Write-Debug "Clearing log: $($Log.LogfileName)"
+			Clear-EventLog -LogName $($Log.LogfileName) 
+        }
+
+Write-Debug "BLA"		
+		## ZIP exported event logs
+		Write-Debug $TempDestinationPath
+		$zipArchiveFile = Join-Path -Path $eventLogArchiveFolderPath -ChildPath "$MachineName_$($Log.LogfileName)_Archive_$(Get-Date -Format MM.dd.yyyy-hhmm).zip"
+		
+		Write-Debug "Compressing archived log: $zipArchiveFile"
+		[IO.Compression.ZIPFile]::CreateFromDirectory($TempDestinationPath, $zipArchiveFile)		
+		
+		# Delete event log temp file
+		Write-Debug "Removing temp event log file: $tempEventLogFullPath"
+		try { Remove-Item $tempEventLogFullPath -ErrorAction Stop }	      
+		catch {}    
+            
+		# Write event log entry
+		$message = "Security log size (" + $logSizeMB + "mb) exceeded 75% of configured maximum and was archived to: " + $zipArchiveFile
+		Write-EventLog -LogName Application -Source $EventSource -EventId 775 -Message $message -Category 1
 	}
 }
 
@@ -382,20 +414,28 @@ if ($ArchiveRetentionDays -ge 0)
 	
 	if ($expiredEventLogArchiveFiles.count -ne 0) 
 	{
+
 		foreach ($currentExpiredLog in $expiredEventLogArchiveFiles)
 		{
-			Write-Debug "Removing: $($currentExpiredLog.VersionInfo.FileName)"
-			try 
-			{
-				$eventMessage = "Removing expired Eventlog backup:`n`n$($currentExpiredLog.VersionInfo.FileName)"
-				if (!$Dry) { Remove-Item $currentExpiredLog.versioninfo.FileName -ErrorAction stop }
-				Write-EventLog -LogName Application -Source $EventSource -EventId 778 -Message $eventMessage -Category 1 -EntryType Information
-			}
-			catch 
-			{
-				$eventMessage = "Unable to remove expired Eventlog backup:`n`n$($currentExpiredLog.VersionInfo.FileName)`n`nError: $_"
-				Write-EventLog -LogName Application -Source $EventSource -EventId 780 -Message $eventMessage -Category 9 -EntryType error
-			}
+            if ($Dry)
+            {
+			    Write-Debug "Removing: $($currentExpiredLog.VersionInfo.FileName)"
+			    try 
+			    {
+				    $eventMessage = "Removing expired Eventlog backup:`n`n$($currentExpiredLog.VersionInfo.FileName)"
+				    Remove-Item $currentExpiredLog.versioninfo.FileName -ErrorAction Stop
+				    Write-EventLog -LogName Application -Source $EventSource -EventId 778 -Message $eventMessage -Category 1 -EntryType Information
+			    }
+			    catch 
+			    {
+				    $eventMessage = "Unable to remove expired Eventlog backup:`n`n$($currentExpiredLog.VersionInfo.FileName)`n`nError: $_"
+				    Write-EventLog -LogName Application -Source $EventSource -EventId 780 -Message $eventMessage -Category 9 -EntryType error
+			    }
+            }
+            else
+            {
+                Write-Debug "Should be removed: $($currentExpiredLog.VersionInfo.FileName)"
+            }
 		}		
 	}
 }
@@ -418,31 +458,31 @@ if (($autoArchivedLogFiles).Count -gt 0)
 	{
 		$eventLogName = ($currentAutoLog.Name.Split('-')[1])
 		$autoArchivedEventLogFullPath = $($currentAutoLog.VersionInfo.FileName).ToString()
-		$eventLogArchiveFolderPath = $($DestinationPath + "\" + $eventLogName)
+		$eventLogArchiveFolderPath = Join-Path $DestinationPath -ChildPath $eventLogName
 		
 		# Check / Create directory for log
-		if ((Test-Path $eventLogArchiveFolderPath) -eq $False)
+		if (!(Test-Path $eventLogArchiveFolderPath))
 		{
 		    New-Item $eventLogArchiveFolderPath -type directory -ErrorAction Stop -Force | Out-Null
 		}
         
-        write-debug "Moving archive log to temp directory: [$autoArchivedEventLogFullPath => $TempDestinationPath]"
+        
         if (!$Dry)
 		{
+            Write-Debug "Moving archive log to temp directory: [$autoArchivedEventLogFullPath => $TempDestinationPath]"
 			$TTCM = (Measure-Command {Move-Item -Path $autoArchivedEventLogFullPath -Destination $TempDestinationPath})		
 		}
 		else
 		{
+            Write-Debug "Copying archive log to temp directory: [$autoArchivedEventLogFullPath => $TempDestinationPath]"
 			$TTCM = (Measure-Command {Copy-Item -Path $autoArchivedEventLogFullPath -Destination $TempDestinationPath})		
 		}
 		Write-Debug "Time to complete move [MM:SS]: $($TTCM.Minutes):$($TTCM.Seconds)"
 
 
 		## ZIP exported event logs
-		Write-Debug $TempDestinationPath
-		$zipArchiveFile = ($eventLogArchiveFolderPath + "\" + $MachineName + "_" + $eventLogName + $($currentAutoLog.Name) + ".zip")
+		$zipArchiveFile = Join-Path -Path $eventLogArchiveFolderPath -ChildPath "$MachineName_$eventLogName$($currentAutoLog.Name).zip"
 		
-        Write-Debug "Log to Arc: $autoArchivedEventLogFullPath"
 		Write-Debug "Compressing archived log: $zipArchiveFile"
         [IO.Compression.ZIPFile]::CreateFromDirectory($TempDestinationPath, $zipArchiveFile)
 		
@@ -450,6 +490,7 @@ if (($autoArchivedLogFiles).Count -gt 0)
 		Write-EventLog -LogName Application -Source $EventSource -EventId 777 -Message $eventMessage -Category 1 -EntryType Information
 
 		# Remove copied logs from the temp directory
+        Write-Debug "Clearing temp folder"
         Get-ChildItem -Path $TempDestinationPath | Remove-Item
 	}
 }
