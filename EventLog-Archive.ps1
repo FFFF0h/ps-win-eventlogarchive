@@ -366,7 +366,7 @@ foreach ($Log in $eventLogConfig)
 		}
 
 		# Export log to temp directory
-		$tempEventLogFullPath = Join-Path -Path $TempDestinationPath -ChildPath "$($Log.LogfileName)_TEMP.evt"
+		$tempEventLogFullPath = Join-Path -Path $TempDestinationPath -ChildPath "$($Log.LogfileName)_Backup.evt"
 		$tempEvtLog = Get-WmiObject Win32_NTEventlogFile | ? {$_.LogfileName -eq $($log.LogfileName)}
 		$tempEvtLog.BackupEventLog($tempEventLogFullPath)
 
