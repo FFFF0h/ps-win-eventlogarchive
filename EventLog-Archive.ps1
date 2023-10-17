@@ -2,7 +2,7 @@
 .NOTES
 	????/??/?? - Version 1602 - Daniel Hibbert - Initial version.
 	2023/09/29 - Version 1802 - Laurent Le Guillermic - Enhancements & bug corrections.
-        2023/10/17 - Version 1902 - Laurent Le Guillermic - fix some bugs.
+    2023/10/17 - Version 1902 - Laurent Le Guillermic - fix some bugs.
 
 .SYNOPSIS
 	Collect and archive Eventlogs on Windows servers
@@ -224,7 +224,7 @@ if (!(Test-Path $HKLMLogMaintenancePath))
 
 	    # Write Scheduled Task XML
 	    Write-Debug "[SETUP]Saving scheduled task XML to disk"
-	    $XMLExportPath = ($DestinationPath + "\_script\" + $MachineName + "-LogArchive.xml")
+	    $XMLExportPath = Join-Path -Path $ScriptDestinationPath -ChildPath "$($MachineName)-LogArchive.xml"
 	    $ScheduledTaskXML.Save($XMLExportPath)
 
 	    # Create scheduled task
@@ -364,14 +364,11 @@ foreach ($Log in $eventLogConfig)
 		{ 
 			New-Item $eventLogArchiveFolderPath -type directory -ErrorAction Stop -Force | Out-Null 
 		}
-Write-Debug "BLA"
 
 		# Export log to temp directory
 		$tempEventLogFullPath = Join-Path -Path $TempDestinationPath -ChildPath "$($Log.LogfileName)_TEMP.evt"
 		$tempEvtLog = Get-WmiObject Win32_NTEventlogFile | ? {$_.LogfileName -eq $($log.LogfileName)}
 		$tempEvtLog.BackupEventLog($tempEventLogFullPath)
-
-Write-Debug "BLA"
 
 		# Clear event log
         if (!$Dry) 
@@ -379,11 +376,10 @@ Write-Debug "BLA"
 			Write-Debug "Clearing log: $($Log.LogfileName)"
 			Clear-EventLog -LogName $($Log.LogfileName) 
         }
-
-Write-Debug "BLA"		
+		
 		## ZIP exported event logs
 		Write-Debug $TempDestinationPath
-		$zipArchiveFile = Join-Path -Path $eventLogArchiveFolderPath -ChildPath "$MachineName_$($Log.LogfileName)_Archive_$(Get-Date -Format MM.dd.yyyy-hhmm).zip"
+		$zipArchiveFile = Join-Path -Path $eventLogArchiveFolderPath -ChildPath "$($MachineName)_$($Log.LogfileName)_Archive_$(Get-Date -Format yyyy-MM-dd-hh-mm).zip"
 		
 		Write-Debug "Compressing archived log: $zipArchiveFile"
 		[IO.Compression.ZIPFile]::CreateFromDirectory($TempDestinationPath, $zipArchiveFile)		
@@ -466,7 +462,6 @@ if (($autoArchivedLogFiles).Count -gt 0)
 		    New-Item $eventLogArchiveFolderPath -type directory -ErrorAction Stop -Force | Out-Null
 		}
         
-        
         if (!$Dry)
 		{
             Write-Debug "Moving archive log to temp directory: [$autoArchivedEventLogFullPath => $TempDestinationPath]"
@@ -481,7 +476,7 @@ if (($autoArchivedLogFiles).Count -gt 0)
 
 
 		## ZIP exported event logs
-		$zipArchiveFile = Join-Path -Path $eventLogArchiveFolderPath -ChildPath "$MachineName_$eventLogName$($currentAutoLog.Name).zip"
+		$zipArchiveFile = Join-Path -Path $eventLogArchiveFolderPath -ChildPath "$($MachineName)_$eventLogName_$($currentAutoLog.Name).zip"
 		
 		Write-Debug "Compressing archived log: $zipArchiveFile"
         [IO.Compression.ZIPFile]::CreateFromDirectory($TempDestinationPath, $zipArchiveFile)
