@@ -2,7 +2,7 @@
 .NOTES
 	????/??/?? - Version 1602 - Daniel Hibbert - Initial version.
 	2023/09/29 - Version 1802 - Laurent Le Guillermic - Enhancements & bug corrections.
-    2023/10/17 - Version 1902 - Laurent Le Guillermic - fix some bugs.
+        2023/10/17 - Version 1902 - Laurent Le Guillermic - fix some bugs.
 
 .SYNOPSIS
 	Collect and archive Eventlogs on Windows servers
